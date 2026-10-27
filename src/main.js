@@ -61,6 +61,7 @@ const state = {
   current: 0.6,
   width: 28,
   murk: 0.5,
+  snake: 0.4,
 };
 
 function seaSliders(sea) {
@@ -134,14 +135,30 @@ ball.y = ocean.sea.sample(0, 0).height;
 
 const buoys = createBuoys(GFX, scene);
 
-// The river: a current downstream (+x) between two grassy banks that follow the float.
+// The river: a current downstream (+x) between two grassy banks, winding as far as `snake` says.
+const BEND = 60, SEG = 6, SEGS = 70;
+const middle = (x) => state.snake * 30 * Math.sin(x / BEND);
+const slope = (x) => (state.snake * 30 / BEND) * Math.cos(x / BEND);
 const bankMaterial = new GFX.MeshStandardMaterial({ name: 'bank', color: new GFX.Color('#4a6b32'), roughness: 1 });
-const banks = [-1, 1].map((side) => {
-  const bank = new GFX.Mesh(new GFX.BoxGeometry(600, 4, 40), bankMaterial);
-  bank.position.set(0, 0.6, side * (state.width / 2 + 20));
+const bankBox = new GFX.BoxGeometry(SEG * 1.3, 4, 40);
+const banks = [];
+for (let i = 0; i < SEGS * 2; i++) {
+  const bank = new GFX.Mesh(bankBox, bankMaterial);
   scene.add(bank);
-  return bank;
-});
+  banks.push(bank);
+}
+function placeBanks(x0) {
+  const start = Math.round(x0 / SEG) * SEG - (SEGS / 2) * SEG;
+  for (let i = 0; i < SEGS; i++) {
+    const x = start + i * SEG, a = Math.atan(slope(x));
+    for (const side of [-1, 1]) {
+      const off = (state.width / 2 + 20) / Math.cos(a);
+      const bank = banks[i * 2 + (side + 1) / 2];
+      bank.position.set(x, 0.6, middle(x) + side * off);
+      bank.rotation.y = -a;
+    }
+  }
+}
 const effects = createEffects(GFX, scene, { ground: ocean.sea });
 const drop = new GFX.SphereGeometry(0.09, 6, 4);
 const dropMaterial = new GFX.MeshBasicMaterial({ name: 'spray', color: new GFX.Color('#e8f4f6'), transparent: true, opacity: 0.85 });
@@ -196,6 +213,7 @@ const panel = createPanel(document.getElementById('panel'), [
     sliders: [
       { key: 'current', label: 'Current', min: 0, max: 3, step: 0.01, value: state.current },
       { key: 'width', label: 'Width', min: 6, max: 80, step: 1, value: state.width, show: (v) => `${v.toFixed(0)} m` },
+      { key: 'snake', label: 'Snakiness', min: 0, max: 1, step: 0.01, value: state.snake },
       { key: 'murk', label: 'Murkiness', min: 0, max: 1, step: 0.01, value: state.murk },
     ],
   },
@@ -256,7 +274,11 @@ stage.renderer.setAnimationLoop((now) => {
 
   // The float, in fixed steps.
   const push = toGround(input.stick(), view.yaw);
-  push[0] += state.current;
+  {
+    const a = Math.atan(slope(ball.x));
+    push[0] += state.current * Math.cos(a);
+    push[1] += state.current * Math.sin(a);
+  }
   accumulator = Math.min(accumulator + dt, STEP * 12);
   while (accumulator >= STEP) {
     accumulator -= STEP;
@@ -271,11 +293,12 @@ stage.renderer.setAnimationLoop((now) => {
   }
   // The banks turn the float back into the stream.
   const edge = state.width / 2 - ball.r;
-  if (Math.abs(ball.z) > edge) {
-    ball.z = Math.sign(ball.z) * edge;
+  const off = ball.z - middle(ball.x);
+  if (Math.abs(off) > edge) {
+    ball.z = middle(ball.x) + Math.sign(off) * edge;
     ball.vz *= -0.4;
   }
-  banks.forEach((bank, i) => bank.position.set(ball.x, 0.6, (i * 2 - 1) * (state.width / 2 + 20)));
+  placeBanks(ball.x);
   buoys.update(ocean.sea, ball.x, ball.z, time, dt, ball);
   for (const b of buoys.list) {
     if (b.knock) {
