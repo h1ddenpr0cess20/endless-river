@@ -57,7 +57,7 @@ const state = {
   ...skySliders(skyName),
   exposure: 1,
   distance: 1,
-  flow: false,
+  dayGoesBy: false,
   wild: RIVERS[riverName],
   ...riverSliders(RIVERS[riverName]),
   murk: 0.5,
@@ -159,7 +159,7 @@ const panel = createPanel(document.getElementById('panel'), [
       { key: 'haze', label: 'Haze', min: 0.2, max: 4, step: 0.01, value: state.haze, show: (v) => `×${v.toFixed(1)}` },
       { key: 'exposure', label: 'Exposure', min: 0.4, max: 2, step: 0.01, value: state.exposure, show: (v) => `×${v.toFixed(2)}` },
     ],
-    toggles: [{ key: 'flow', label: 'Let the day go by', value: state.flow }],
+    toggles: [{ key: 'dayGoesBy', label: 'Let the day go by', value: state.dayGoesBy }],
   },
   {
     title: 'River',
@@ -178,7 +178,7 @@ const panel = createPanel(document.getElementById('panel'), [
   },
 ], (key, value) => {
   state[key] = value;
-  if (key in river) river[key] = value;
+  if (['width', 'snake', 'current'].includes(key)) river[key] = value;
   if (key === 'wild') wilder(value, 0.5);
   else if (['hour', 'overcast', 'clouds', 'haze', 'murk'].includes(key)) ocean.setSky(skyOf(state), 0.25);
   else if (key === 'exposure') ocean.exposure = value;
@@ -228,7 +228,7 @@ stage.renderer.setAnimationLoop((now) => {
   view.zoomBy(look.zoom);
   view.step(dt);
 
-  if (state.flow) {
+  if (state.dayGoesBy) {
     // A day in four minutes.
     state.hour = (state.hour + dt * 0.1) % 24;
     skyClock -= dt;
