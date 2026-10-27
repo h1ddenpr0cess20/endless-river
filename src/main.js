@@ -247,7 +247,9 @@ stage.renderer.setAnimationLoop((now) => {
       flowAngle = a;
       ocean.setSea(seaOf(state), 1);
     }
-    ocean.sea.current = river.water(ball.x, ball.z);
+    // The water runs as it does mid-stream: all of it, not just the water by the float,
+    // so it doesn't slow down everywhere when the float drifts to a bank.
+    ocean.sea.current = river.water(ball.x, river.middle(ball.x));
   }
   accumulator = Math.min(accumulator + dt, STEP * 12);
   while (accumulator >= STEP) {
