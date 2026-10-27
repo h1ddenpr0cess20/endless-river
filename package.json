@@ -1,0 +1,17 @@
+{
+  "name": "endless-river",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "madness-engine": "git+https://github.com/h1ddenpr0cess20/madness-engine.git"
+  },
+  "devDependencies": {
+    "vite": "^7.1.0"
+  }
+}
