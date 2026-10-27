@@ -17,6 +17,7 @@ import { createEffects } from 'madness-engine/effects';
 import { createInput } from 'madness-engine/input';
 import { turn } from 'madness-engine/physics';
 import { defineView, toGround } from 'madness-engine/view';
+import { createRiver } from 'madness-engine/river';
 import { createMarble } from 'madness-engine/heroes/marble';
 import { createBuoys } from './buoys.js';
 import { createFloat, stepFloat } from './float.js';
@@ -133,63 +134,8 @@ ball.y = ocean.sea.sample(0, 0).height;
 
 const buoys = createBuoys(GFX, scene);
 
-// The river: a current downstream (+x) between two grassy banks, winding as far as `snake` says.
-const BEND = 60, SEG = 3;
-const middle = (x) => state.snake * 30 * Math.sin(x / BEND);
-const slope = (x) => (state.snake * 30 / BEND) * Math.cos(x / BEND);
-// Each bank one strip of ground: a muddy slope out of the water, then rolling grass.
-const ALONG = 140, ACROSS = 14, REACH = 50;
-const bankMaterial = new GFX.MeshStandardMaterial({ name: 'bank', vertexColors: true, roughness: 1, side: GFX.DoubleSide });
-const MUD = new GFX.Color('#5b4a33'), GRASS = new GFX.Color('#4d7a2e'), DRY = new GFX.Color('#7f8a3c');
-const lump = (x, z) => Math.sin(x * 0.11 + z * 0.07) * 0.6 + Math.sin(x * 0.031 - z * 0.13) * 0.9 + Math.sin(x * 0.53 + z * 0.41) * 0.12;
-const banks = [-1, 1].map((side) => {
-  const geometry = new GFX.BufferGeometry();
-  const n = (ALONG + 1) * (ACROSS + 1);
-  geometry.setAttribute('position', new GFX.BufferAttribute(new Float32Array(n * 3), 3));
-  geometry.setAttribute('color', new GFX.BufferAttribute(new Float32Array(n * 3), 3));
-  const index = [];
-  for (let i = 0; i < ALONG; i++) {
-    for (let j = 0; j < ACROSS; j++) {
-      const a = i * (ACROSS + 1) + j, b = a + ACROSS + 1;
-      if (side > 0) index.push(a, b, a + 1, b, b + 1, a + 1);
-      else index.push(a, a + 1, b, b, a + 1, b + 1);
-    }
-  }
-  geometry.setIndex(index);
-  const mesh = new GFX.Mesh(geometry, bankMaterial);
-  mesh.frustumCulled = false;
-  scene.add(mesh);
-  return { side, geometry, mesh };
-});
-const tint = new GFX.Color();
-let banksAt = null;
-function placeBanks(x0) {
-  const start = Math.round(x0 / SEG) * SEG - (ALONG / 2) * SEG;
-  const key = `${start}|${state.width}|${state.snake}`;
-  if (key === banksAt) return;
-  banksAt = key;
-  for (const { side, geometry } of banks) {
-    const pos = geometry.attributes.position.array, col = geometry.attributes.color.array;
-    for (let i = 0; i <= ALONG; i++) {
-      const x = start + i * SEG, a = Math.atan(slope(x));
-      const nx = -Math.sin(a) * side, nz = Math.cos(a) * side;
-      for (let j = 0; j <= ACROSS; j++) {
-        // Close rows by the water, wider ones further out.
-        const d = REACH * (j / ACROSS) ** 2 - 1.5;
-        const px = x + nx * (state.width / 2 + d), pz = middle(x) + nz * (state.width / 2 + d);
-        const rise = Math.min(1, Math.max(0, d / 7));
-        const y = -1.2 + 5 * rise * rise * (3 - 2 * rise) + lump(px, pz) * Math.min(1, Math.max(0, d / 10));
-        const k = (i * (ACROSS + 1) + j) * 3;
-        pos[k] = px; pos[k + 1] = y; pos[k + 2] = pz;
-        tint.copy(MUD).lerp(GRASS, Math.min(1, Math.max(0, (d - 0.5) / 2.5))).lerp(DRY, Math.max(0, Math.min(1, lump(px * 1.7, pz * 1.7) * 0.4 + 0.2)));
-        col[k] = tint.r; col[k + 1] = tint.g; col[k + 2] = tint.b;
-      }
-    }
-    geometry.attributes.position.needsUpdate = true;
-    geometry.attributes.color.needsUpdate = true;
-    geometry.computeVertexNormals();
-  }
-}
+// The river: a current downstream between two banks, winding as far as `snake` says.
+const river = createRiver(GFX, scene, state);
 
 const effects = createEffects(GFX, scene, { ground: ocean.sea });
 const drop = new GFX.SphereGeometry(0.09, 6, 4);
@@ -254,6 +200,7 @@ const panel = createPanel(document.getElementById('panel'), [
   },
 ], (key, value) => {
   state[key] = value;
+  if (key in river) river[key] = value;
   if (['height', 'longest', 'choppy', 'spread', 'wind', 'foam'].includes(key)) ocean.setSea(seaOf(state), 0.5);
   else if (['hour', 'overcast', 'clouds', 'haze', 'murk'].includes(key)) ocean.setSky(skyOf(state), 0.25);
   else if (key === 'exposure') ocean.exposure = value;
@@ -306,13 +253,14 @@ stage.renderer.setAnimationLoop((now) => {
   // The float, in fixed steps.
   const push = toGround(input.stick(), view.yaw);
   {
-    const a = Math.atan(slope(ball.x));
+    const a = river.flow(ball.x);
     if (Math.abs(a - flowAngle) > 0.05) {
       flowAngle = a;
       ocean.setSea(seaOf(state), 1);
     }
-    push[0] += state.current * Math.cos(a);
-    push[1] += state.current * Math.sin(a);
+    const [cx, cz] = river.push(ball.x);
+    push[0] += cx;
+    push[1] += cz;
   }
   accumulator = Math.min(accumulator + dt, STEP * 12);
   while (accumulator >= STEP) {
@@ -327,13 +275,8 @@ stage.renderer.setAnimationLoop((now) => {
     }
   }
   // The banks turn the float back into the stream.
-  const edge = state.width / 2 - ball.r;
-  const off = ball.z - middle(ball.x);
-  if (Math.abs(off) > edge) {
-    ball.z = middle(ball.x) + Math.sign(off) * edge;
-    ball.vz *= -0.4;
-  }
-  placeBanks(ball.x);
+  river.keep(ball);
+  river.place(ball.x);
   buoys.update(ocean.sea, ball.x, ball.z, time, dt, ball);
   for (const b of buoys.list) {
     if (b.knock) {
