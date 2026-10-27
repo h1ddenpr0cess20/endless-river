@@ -25,6 +25,7 @@ import { createSound } from './sound.js';
 
 const RADIUS = 1.1;
 const STEP = 1 / 120;
+let flowAngle = 0;
 const params = new URLSearchParams(location.search);
 
 // The time of day, as skies at hours between which the sky is mixed.
@@ -78,7 +79,8 @@ function seaOf(s) {
   return {
     ...base,
     height: s.height, longest: s.longest, choppy: s.choppy, spread: s.spread, foam: s.foam,
-    wind: (s.wind * Math.PI) / 180,
+    // The water runs down the river, wherever the bend at the float points it.
+    wind: flowAngle,
     swell: base.swell ? [base.swell[0], s.height * ratio] : null,
   };
 }
@@ -119,12 +121,8 @@ const ocean = createOcean(GFX, { sea: seaOf(state), sky: skyOf(state), roomEvery
 scene.add(ocean.group);
 ocean.dress(stage);
 
-// Face the sun to begin with: the light on the water is the best of it.
-{
-  const [, az] = skyOf(state).sun.at;
-  const a = (az * Math.PI) / 180;
-  view.yaw = view.aim.yaw = Math.atan2(-Math.cos(a), -Math.sin(a));
-}
+// Face downstream to begin with.
+view.yaw = view.aim.yaw = -Math.PI / 2;
 
 // The float: the engine's glass marble, the size of a fishing float.
 const ball = createFloat(RADIUS);
@@ -136,29 +134,63 @@ ball.y = ocean.sea.sample(0, 0).height;
 const buoys = createBuoys(GFX, scene);
 
 // The river: a current downstream (+x) between two grassy banks, winding as far as `snake` says.
-const BEND = 60, SEG = 6, SEGS = 70;
+const BEND = 60, SEG = 3;
 const middle = (x) => state.snake * 30 * Math.sin(x / BEND);
 const slope = (x) => (state.snake * 30 / BEND) * Math.cos(x / BEND);
-const bankMaterial = new GFX.MeshStandardMaterial({ name: 'bank', color: new GFX.Color('#4a6b32'), roughness: 1 });
-const bankBox = new GFX.BoxGeometry(SEG * 1.3, 4, 40);
-const banks = [];
-for (let i = 0; i < SEGS * 2; i++) {
-  const bank = new GFX.Mesh(bankBox, bankMaterial);
-  scene.add(bank);
-  banks.push(bank);
-}
-function placeBanks(x0) {
-  const start = Math.round(x0 / SEG) * SEG - (SEGS / 2) * SEG;
-  for (let i = 0; i < SEGS; i++) {
-    const x = start + i * SEG, a = Math.atan(slope(x));
-    for (const side of [-1, 1]) {
-      const off = (state.width / 2 + 20) / Math.cos(a);
-      const bank = banks[i * 2 + (side + 1) / 2];
-      bank.position.set(x, 0.6, middle(x) + side * off);
-      bank.rotation.y = -a;
+// Each bank one strip of ground: a muddy slope out of the water, then rolling grass.
+const ALONG = 140, ACROSS = 14, REACH = 50;
+const bankMaterial = new GFX.MeshStandardMaterial({ name: 'bank', vertexColors: true, roughness: 1, side: GFX.DoubleSide });
+const MUD = new GFX.Color('#5b4a33'), GRASS = new GFX.Color('#4d7a2e'), DRY = new GFX.Color('#7f8a3c');
+const lump = (x, z) => Math.sin(x * 0.11 + z * 0.07) * 0.6 + Math.sin(x * 0.031 - z * 0.13) * 0.9 + Math.sin(x * 0.53 + z * 0.41) * 0.12;
+const banks = [-1, 1].map((side) => {
+  const geometry = new GFX.BufferGeometry();
+  const n = (ALONG + 1) * (ACROSS + 1);
+  geometry.setAttribute('position', new GFX.BufferAttribute(new Float32Array(n * 3), 3));
+  geometry.setAttribute('color', new GFX.BufferAttribute(new Float32Array(n * 3), 3));
+  const index = [];
+  for (let i = 0; i < ALONG; i++) {
+    for (let j = 0; j < ACROSS; j++) {
+      const a = i * (ACROSS + 1) + j, b = a + ACROSS + 1;
+      if (side > 0) index.push(a, b, a + 1, b, b + 1, a + 1);
+      else index.push(a, a + 1, b, b, a + 1, b + 1);
     }
   }
+  geometry.setIndex(index);
+  const mesh = new GFX.Mesh(geometry, bankMaterial);
+  mesh.frustumCulled = false;
+  scene.add(mesh);
+  return { side, geometry, mesh };
+});
+const tint = new GFX.Color();
+let banksAt = null;
+function placeBanks(x0) {
+  const start = Math.round(x0 / SEG) * SEG - (ALONG / 2) * SEG;
+  const key = `${start}|${state.width}|${state.snake}`;
+  if (key === banksAt) return;
+  banksAt = key;
+  for (const { side, geometry } of banks) {
+    const pos = geometry.attributes.position.array, col = geometry.attributes.color.array;
+    for (let i = 0; i <= ALONG; i++) {
+      const x = start + i * SEG, a = Math.atan(slope(x));
+      const nx = -Math.sin(a) * side, nz = Math.cos(a) * side;
+      for (let j = 0; j <= ACROSS; j++) {
+        // Close rows by the water, wider ones further out.
+        const d = REACH * (j / ACROSS) ** 2 - 1.5;
+        const px = x + nx * (state.width / 2 + d), pz = middle(x) + nz * (state.width / 2 + d);
+        const rise = Math.min(1, Math.max(0, d / 7));
+        const y = -1.2 + 5 * rise * rise * (3 - 2 * rise) + lump(px, pz) * Math.min(1, Math.max(0, d / 10));
+        const k = (i * (ACROSS + 1) + j) * 3;
+        pos[k] = px; pos[k + 1] = y; pos[k + 2] = pz;
+        tint.copy(MUD).lerp(GRASS, Math.min(1, Math.max(0, (d - 0.5) / 2.5))).lerp(DRY, Math.max(0, Math.min(1, lump(px * 1.7, pz * 1.7) * 0.4 + 0.2)));
+        col[k] = tint.r; col[k + 1] = tint.g; col[k + 2] = tint.b;
+      }
+    }
+    geometry.attributes.position.needsUpdate = true;
+    geometry.attributes.color.needsUpdate = true;
+    geometry.computeVertexNormals();
+  }
 }
+
 const effects = createEffects(GFX, scene, { ground: ocean.sea });
 const drop = new GFX.SphereGeometry(0.09, 6, 4);
 const dropMaterial = new GFX.MeshBasicMaterial({ name: 'spray', color: new GFX.Color('#e8f4f6'), transparent: true, opacity: 0.85 });
@@ -188,7 +220,6 @@ const panel = createPanel(document.getElementById('panel'), [
       { key: 'longest', label: 'Wavelength', min: 20, max: 240, step: 1, value: state.longest, show: (v) => `${v.toFixed(0)} m` },
       { key: 'choppy', label: 'Choppiness', min: 0, max: 0.95, step: 0.01, value: state.choppy },
       { key: 'spread', label: 'Crests (long ↔ confused)', min: 0.05, max: 1.4, step: 0.01, value: state.spread },
-      { key: 'wind', label: 'Wind from', min: 0, max: 359, step: 1, value: state.wind, show: (v) => `${v.toFixed(0)}°` },
       { key: 'foam', label: 'Whitecaps', min: 0, max: 1, step: 0.01, value: state.foam },
     ],
   },
@@ -276,6 +307,10 @@ stage.renderer.setAnimationLoop((now) => {
   const push = toGround(input.stick(), view.yaw);
   {
     const a = Math.atan(slope(ball.x));
+    if (Math.abs(a - flowAngle) > 0.05) {
+      flowAngle = a;
+      ocean.setSea(seaOf(state), 1);
+    }
     push[0] += state.current * Math.cos(a);
     push[1] += state.current * Math.sin(a);
   }
