@@ -100,7 +100,9 @@ function skyOf(s) {
 // ---------------------------------------------------------------- the stage
 
 const host = document.getElementById('game');
-const { createView } = defineView({ home: { pitch: 0.3 }, limits: { pitch: [0.04, 1.3], zoom: [0.35, 4] } });
+// How close and how far back the camera goes, as multiples of the lens's distance: from just by the float to high over the river.
+const ZOOM = [0.35, 20];
+const { createView } = defineView({ home: { pitch: 0.3 }, limits: { pitch: [0.04, 1.3], zoom: ZOOM } });
 const stage = await createStage(host, {
   view: createView(),
   lens: { distance: 14, fov: 42 },
@@ -174,7 +176,11 @@ const panel = createPanel(document.getElementById('panel'), [
   },
   {
     title: 'View',
-    sliders: [{ key: 'distance', label: 'Camera distance', min: 0.35, max: 4, step: 0.01, value: state.distance, show: (v) => `×${v.toFixed(2)}` }],
+    // In doublings, so the slider is as fine close in as far out.
+    sliders: [{
+      key: 'distance', label: 'Camera distance', min: Math.log2(ZOOM[0]), max: Math.log2(ZOOM[1]), step: 0.01,
+      value: Math.log2(state.distance), show: (v) => `×${(2 ** v).toFixed(2)}`,
+    }],
   },
 ], (key, value) => {
   state[key] = value;
@@ -182,7 +188,7 @@ const panel = createPanel(document.getElementById('panel'), [
   if (key === 'wild') wilder(value, 0.5);
   else if (['hour', 'overcast', 'clouds', 'haze', 'murk'].includes(key)) ocean.setSky(skyOf(state), 0.25);
   else if (key === 'exposure') ocean.exposure = value;
-  else if (key === 'distance') view.aim.zoom = value;
+  else if (key === 'distance') view.aim.zoom = state.distance = 2 ** value;
 });
 panel.choose('Sky', skyName);
 panel.choose('River', riverName);
@@ -226,6 +232,11 @@ stage.renderer.setAnimationLoop((now) => {
   const look = input.view(dt);
   view.turn(look.turn, look.tilt);
   view.zoomBy(look.zoom);
+  // The slider follows the wheel and the pinch.
+  if (view.aim.zoom !== state.distance) {
+    state.distance = view.aim.zoom;
+    panel.set({ distance: Math.log2(state.distance) });
+  }
   view.step(dt);
 
   if (state.dayGoesBy) {
