@@ -58,6 +58,9 @@ const state = {
   exposure: 1,
   distance: 1,
   flow: false,
+  current: 0.6,
+  width: 28,
+  murk: 0.5,
 };
 
 function seaSliders(sea) {
@@ -86,8 +89,12 @@ function skyOf(s) {
     const grey = mixSky(SKIES.storm, NIGHT_STORM, at(DARK, s.hour));
     sky = mixSky(sky, { ...grey, sun: { ...grey.sun, at: sky.sun.at } }, s.overcast);
   }
+  const muddy = { deep: '#1a1408', body: '#5a4a24', glow: '#8a7a3a' };
+  const water = { ...sky.water };
+  for (const k in muddy) water[k] = '#' + new GFX.Color(sky.water[k]).lerp(new GFX.Color(muddy[k]), s.murk).getHexString();
   return {
     ...sky,
+    water,
     cloud: { ...sky.cloud, cover: s.clouds + (0.95 - s.clouds) * s.overcast },
     haze: sky.haze * s.haze,
   };
@@ -128,11 +135,10 @@ ball.y = ocean.sea.sample(0, 0).height;
 const buoys = createBuoys(GFX, scene);
 
 // The river: a current downstream (+x) between two grassy banks that follow the float.
-const HALF = 14, CURRENT = 0.6;
 const bankMaterial = new GFX.MeshStandardMaterial({ name: 'bank', color: new GFX.Color('#4a6b32'), roughness: 1 });
 const banks = [-1, 1].map((side) => {
   const bank = new GFX.Mesh(new GFX.BoxGeometry(600, 4, 40), bankMaterial);
-  bank.position.set(0, 0.6, side * (HALF + 20));
+  bank.position.set(0, 0.6, side * (state.width / 2 + 20));
   scene.add(bank);
   return bank;
 });
@@ -186,13 +192,21 @@ const panel = createPanel(document.getElementById('panel'), [
     toggles: [{ key: 'flow', label: 'Let the day go by', value: state.flow }],
   },
   {
+    title: 'River',
+    sliders: [
+      { key: 'current', label: 'Current', min: 0, max: 3, step: 0.01, value: state.current },
+      { key: 'width', label: 'Width', min: 6, max: 80, step: 1, value: state.width, show: (v) => `${v.toFixed(0)} m` },
+      { key: 'murk', label: 'Murkiness', min: 0, max: 1, step: 0.01, value: state.murk },
+    ],
+  },
+  {
     title: 'View',
     sliders: [{ key: 'distance', label: 'Camera distance', min: 0.35, max: 4, step: 0.01, value: state.distance, show: (v) => `×${v.toFixed(2)}` }],
   },
 ], (key, value) => {
   state[key] = value;
   if (['height', 'longest', 'choppy', 'spread', 'wind', 'foam'].includes(key)) ocean.setSea(seaOf(state), 0.5);
-  else if (['hour', 'overcast', 'clouds', 'haze'].includes(key)) ocean.setSky(skyOf(state), 0.25);
+  else if (['hour', 'overcast', 'clouds', 'haze', 'murk'].includes(key)) ocean.setSky(skyOf(state), 0.25);
   else if (key === 'exposure') ocean.exposure = value;
   else if (key === 'distance') view.aim.zoom = value;
 });
@@ -242,7 +256,7 @@ stage.renderer.setAnimationLoop((now) => {
 
   // The float, in fixed steps.
   const push = toGround(input.stick(), view.yaw);
-  push[0] += CURRENT;
+  push[0] += state.current;
   accumulator = Math.min(accumulator + dt, STEP * 12);
   while (accumulator >= STEP) {
     accumulator -= STEP;
@@ -256,12 +270,12 @@ stage.renderer.setAnimationLoop((now) => {
     }
   }
   // The banks turn the float back into the stream.
-  const edge = HALF - ball.r;
+  const edge = state.width / 2 - ball.r;
   if (Math.abs(ball.z) > edge) {
     ball.z = Math.sign(ball.z) * edge;
     ball.vz *= -0.4;
   }
-  for (const bank of banks) bank.position.x = ball.x;
+  banks.forEach((bank, i) => bank.position.set(ball.x, 0.6, (i * 2 - 1) * (state.width / 2 + 20)));
   buoys.update(ocean.sea, ball.x, ball.z, time, dt, ball);
   for (const b of buoys.list) {
     if (b.knock) {
