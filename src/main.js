@@ -1,32 +1,33 @@
 /**
  * Endless River: a glass float carried down a river that never ends, under a
  * sky that turns from night to day and back. Everything is made as it is
- * drawn by madness-engine: the stage, the water and the sky (`ocean`), the
+ * drawn by madness-engine: the stage, the water and the sky (`ocean`), the river (`river`), the
  * float (the engine's glass marble, blown up to a fishing float), the
  * controls, the splashes and the sound.
  *
  *     npm install && npm run dev
  *
- * `?sea=storm&sky=dusk` starts it in one of the presets (seas: glass, calm,
- * breeze, swell, storm; skies: dawn, noon, dusk, storm, night).
+ * `?river=rapids&sky=dusk` starts it on one of the rivers (canal, stream,
+ * river, rapids) under one of the skies (dawn, noon, dusk, storm, night).
  */
 import * as GFX from 'madness-engine/gfx';
 import { createStage } from 'madness-engine/stage';
-import { createOcean, mixSky, SEAS, SKIES } from 'madness-engine/ocean';
+import { createOcean, mixSky, SKIES } from 'madness-engine/ocean';
 import { createEffects } from 'madness-engine/effects';
 import { createInput } from 'madness-engine/input';
 import { turn } from 'madness-engine/physics';
 import { defineView, toGround } from 'madness-engine/view';
+import { createRiver, RIVERS, riverOf } from 'madness-engine/river';
 import { createMarble } from 'madness-engine/heroes/marble';
-import { createBuoys } from './buoys.js';
 import { createFloat, stepFloat } from './float.js';
 import { createPanel } from './panel.js';
 import { createSound } from './sound.js';
 
 const RADIUS = 1.1;
 const STEP = 1 / 120;
-let flowAngle = 0;
+
 const params = new URLSearchParams(location.search);
+let flowAngle = 0;
 
 // The time of day, as skies at hours between which the sky is mixed.
 const DUSK_TO_NIGHT = mixSky(SKIES.dusk, SKIES.night, 0.55);
@@ -50,40 +51,33 @@ const at = (table, hour) => {
 };
 
 // What the sliders say, and the presets they start from.
-const seaName = SEAS[params.get('sea')] ? params.get('sea') : 'calm';
+const riverName = RIVERS[params.get('river')] !== undefined ? params.get('river') : 'river';
 const skyName = SKIES[params.get('sky')] ? params.get('sky') : 'dusk';
 const state = {
-  seaBase: SEAS[seaName],
-  ...seaSliders(SEAS[seaName]),
   ...skySliders(skyName),
   exposure: 1,
   distance: 1,
   flow: false,
-  current: 0.6,
-  width: 28,
+  wild: RIVERS[riverName],
+  ...riverSliders(RIVERS[riverName]),
   murk: 0.5,
-  snake: 0.4,
 };
 
-function seaSliders(sea) {
-  return { height: sea.height, longest: sea.longest, choppy: sea.choppy, spread: sea.spread, wind: ((sea.wind * 180) / Math.PI + 360) % 360, foam: sea.foam };
-}
 function skySliders(name) {
   return { hour: HOURS[name], overcast: name === 'storm' ? 1 : 0, clouds: SKIES[name === 'storm' ? 'noon' : name].cloud.cover, haze: 1 };
 }
 
-/** The sea the sliders make: the preset's own waves, as high, as long and as choppy as the sliders say. */
-function seaOf(s) {
-  const base = s.seaBase;
-  const ratio = base.swell ? base.swell[1] / base.height : 0;
-  return {
-    ...base,
-    height: s.height, longest: s.longest, choppy: s.choppy, spread: s.spread, foam: s.foam,
-    // The water runs down the river, wherever the bend at the float points it.
-    wind: flowAngle,
-    swell: base.swell ? [base.swell[0], s.height * ratio] : null,
-  };
+function riverSliders(wild) {
+  const { width, snake, current } = riverOf(wild);
+  return { wild, width, snake, current };
 }
+
+/** The river's water, as wild as the slider says, running down the stream at the float. */
+function seaOf(s) {
+  return { ...riverOf(s.wild).sea, wind: flowAngle };
+}
+const waveHeight = () => riverOf(state.wild).sea.height;
+const foam = () => riverOf(state.wild).sea.foam;
 
 /** The sky the sliders make: the hour's sky, clouded over as far as they say. */
 function skyOf(s) {
@@ -131,65 +125,9 @@ scene.add(marble);
 const q = [0, 0, 0, 1], spinRate = [0, 0, 0];
 ball.y = ocean.sea.sample(0, 0).height;
 
-const buoys = createBuoys(GFX, scene);
 
-// The river: a current downstream (+x) between two grassy banks, winding as far as `snake` says.
-const BEND = 60, SEG = 3;
-const middle = (x) => state.snake * 30 * Math.sin(x / BEND);
-const slope = (x) => (state.snake * 30 / BEND) * Math.cos(x / BEND);
-// Each bank one strip of ground: a muddy slope out of the water, then rolling grass.
-const ALONG = 140, ACROSS = 14, REACH = 50;
-const bankMaterial = new GFX.MeshStandardMaterial({ name: 'bank', vertexColors: true, roughness: 1, side: GFX.DoubleSide });
-const MUD = new GFX.Color('#5b4a33'), GRASS = new GFX.Color('#4d7a2e'), DRY = new GFX.Color('#7f8a3c');
-const lump = (x, z) => Math.sin(x * 0.11 + z * 0.07) * 0.6 + Math.sin(x * 0.031 - z * 0.13) * 0.9 + Math.sin(x * 0.53 + z * 0.41) * 0.12;
-const banks = [-1, 1].map((side) => {
-  const geometry = new GFX.BufferGeometry();
-  const n = (ALONG + 1) * (ACROSS + 1);
-  geometry.setAttribute('position', new GFX.BufferAttribute(new Float32Array(n * 3), 3));
-  geometry.setAttribute('color', new GFX.BufferAttribute(new Float32Array(n * 3), 3));
-  const index = [];
-  for (let i = 0; i < ALONG; i++) {
-    for (let j = 0; j < ACROSS; j++) {
-      const a = i * (ACROSS + 1) + j, b = a + ACROSS + 1;
-      if (side > 0) index.push(a, b, a + 1, b, b + 1, a + 1);
-      else index.push(a, a + 1, b, b, a + 1, b + 1);
-    }
-  }
-  geometry.setIndex(index);
-  const mesh = new GFX.Mesh(geometry, bankMaterial);
-  mesh.frustumCulled = false;
-  scene.add(mesh);
-  return { side, geometry, mesh };
-});
-const tint = new GFX.Color();
-let banksAt = null;
-function placeBanks(x0) {
-  const start = Math.round(x0 / SEG) * SEG - (ALONG / 2) * SEG;
-  const key = `${start}|${state.width}|${state.snake}`;
-  if (key === banksAt) return;
-  banksAt = key;
-  for (const { side, geometry } of banks) {
-    const pos = geometry.attributes.position.array, col = geometry.attributes.color.array;
-    for (let i = 0; i <= ALONG; i++) {
-      const x = start + i * SEG, a = Math.atan(slope(x));
-      const nx = -Math.sin(a) * side, nz = Math.cos(a) * side;
-      for (let j = 0; j <= ACROSS; j++) {
-        // Close rows by the water, wider ones further out.
-        const d = REACH * (j / ACROSS) ** 2 - 1.5;
-        const px = x + nx * (state.width / 2 + d), pz = middle(x) + nz * (state.width / 2 + d);
-        const rise = Math.min(1, Math.max(0, d / 7));
-        const y = -1.2 + 5 * rise * rise * (3 - 2 * rise) + lump(px, pz) * Math.min(1, Math.max(0, d / 10));
-        const k = (i * (ACROSS + 1) + j) * 3;
-        pos[k] = px; pos[k + 1] = y; pos[k + 2] = pz;
-        tint.copy(MUD).lerp(GRASS, Math.min(1, Math.max(0, (d - 0.5) / 2.5))).lerp(DRY, Math.max(0, Math.min(1, lump(px * 1.7, pz * 1.7) * 0.4 + 0.2)));
-        col[k] = tint.r; col[k + 1] = tint.g; col[k + 2] = tint.b;
-      }
-    }
-    geometry.attributes.position.needsUpdate = true;
-    geometry.attributes.color.needsUpdate = true;
-    geometry.computeVertexNormals();
-  }
-}
+// The river: a current downstream between two banks, winding as far as `snake` says.
+const river = createRiver(GFX, scene, state);
 
 const effects = createEffects(GFX, scene, { ground: ocean.sea });
 const drop = new GFX.SphereGeometry(0.09, 6, 4);
@@ -208,22 +146,6 @@ const input = createInput(host, {
 
 const panel = createPanel(document.getElementById('panel'), [
   {
-    title: 'Sea',
-    presets: Object.keys(SEAS).map((name) => [name, () => {
-      state.seaBase = SEAS[name];
-      Object.assign(state, seaSliders(SEAS[name]));
-      panel.set(seaSliders(SEAS[name]));
-      ocean.setSea(seaOf(state), 5);
-    }]),
-    sliders: [
-      { key: 'height', label: 'Wave height', min: 0, max: 6, step: 0.01, value: state.height, show: (v) => `${v.toFixed(2)} m` },
-      { key: 'longest', label: 'Wavelength', min: 20, max: 240, step: 1, value: state.longest, show: (v) => `${v.toFixed(0)} m` },
-      { key: 'choppy', label: 'Choppiness', min: 0, max: 0.95, step: 0.01, value: state.choppy },
-      { key: 'spread', label: 'Crests (long ↔ confused)', min: 0.05, max: 1.4, step: 0.01, value: state.spread },
-      { key: 'foam', label: 'Whitecaps', min: 0, max: 1, step: 0.01, value: state.foam },
-    ],
-  },
-  {
     title: 'Sky',
     presets: Object.keys(SKIES).map((name) => [name, () => {
       Object.assign(state, skySliders(name));
@@ -241,8 +163,10 @@ const panel = createPanel(document.getElementById('panel'), [
   },
   {
     title: 'River',
+    presets: Object.keys(RIVERS).map((name) => [name, () => wilder(RIVERS[name], 5)]),
     sliders: [
-      { key: 'current', label: 'Current', min: 0, max: 3, step: 0.01, value: state.current },
+      { key: 'wild', label: 'Canal ↔ rapids', min: 0, max: 1, step: 0.01, value: state.wild },
+      { key: 'current', label: 'Current', min: 0, max: 7, step: 0.01, value: state.current, show: (v) => `${v.toFixed(1)} m/s` },
       { key: 'width', label: 'Width', min: 6, max: 80, step: 1, value: state.width, show: (v) => `${v.toFixed(0)} m` },
       { key: 'snake', label: 'Snakiness', min: 0, max: 1, step: 0.01, value: state.snake },
       { key: 'murk', label: 'Murkiness', min: 0, max: 1, step: 0.01, value: state.murk },
@@ -254,17 +178,29 @@ const panel = createPanel(document.getElementById('panel'), [
   },
 ], (key, value) => {
   state[key] = value;
-  if (['height', 'longest', 'choppy', 'spread', 'wind', 'foam'].includes(key)) ocean.setSea(seaOf(state), 0.5);
+  if (key in river) river[key] = value;
+  if (key === 'wild') wilder(value, 0.5);
   else if (['hour', 'overcast', 'clouds', 'haze', 'murk'].includes(key)) ocean.setSky(skyOf(state), 0.25);
   else if (key === 'exposure') ocean.exposure = value;
   else if (key === 'distance') view.aim.zoom = value;
 });
-panel.choose('Sea', seaName);
 panel.choose('Sky', skyName);
+panel.choose('River', riverName);
+ocean.sea.run = riverOf(state.wild).run;
 // Folded away to begin with on a phone, where it would cover the sea.
 if (params.get('panel') === 'closed' || matchMedia('(max-width: 640px)').matches) {
   document.getElementById('panel').classList.add('closed');
   document.querySelector('.panel-head').setAttribute('aria-expanded', 'false');
+}
+
+/** Turns the whole river as wild as `wild`: its width, bends, current and water. */
+function wilder(wild, seconds) {
+  const next = riverSliders(wild);
+  Object.assign(state, next);
+  Object.assign(river, next);
+  panel.set(next);
+  ocean.sea.run = riverOf(wild).run;
+  ocean.setSea(seaOf(state), seconds);
 }
 
 function clock(h) {
@@ -306,18 +242,18 @@ stage.renderer.setAnimationLoop((now) => {
   // The float, in fixed steps.
   const push = toGround(input.stick(), view.yaw);
   {
-    const a = Math.atan(slope(ball.x));
+    const a = river.flow(ball.x);
     if (Math.abs(a - flowAngle) > 0.05) {
       flowAngle = a;
       ocean.setSea(seaOf(state), 1);
     }
-    push[0] += state.current * Math.cos(a);
-    push[1] += state.current * Math.sin(a);
+    ocean.sea.current = river.water(ball.x, ball.z);
   }
   accumulator = Math.min(accumulator + dt, STEP * 12);
   while (accumulator >= STEP) {
     accumulator -= STEP;
-    const hard = stepFloat(ball, ocean.sea, push, STEP, ocean.sea.wind, 0.15 + 0.25 * state.foam);
+    river.carry(ball, STEP);
+    const hard = stepFloat(ball, ocean.sea, push, STEP, ocean.sea.wind, 0);
     if (hard > 2.5) {
       sound.splash(hard);
       effects.burst({
@@ -327,20 +263,8 @@ stage.renderer.setAnimationLoop((now) => {
     }
   }
   // The banks turn the float back into the stream.
-  const edge = state.width / 2 - ball.r;
-  const off = ball.z - middle(ball.x);
-  if (Math.abs(off) > edge) {
-    ball.z = middle(ball.x) + Math.sign(off) * edge;
-    ball.vz *= -0.4;
-  }
-  placeBanks(ball.x);
-  buoys.update(ocean.sea, ball.x, ball.z, time, dt, ball);
-  for (const b of buoys.list) {
-    if (b.knock) {
-      sound.knock(b.knock);
-      b.knock = 0;
-    }
-  }
+  river.keep(ball);
+  river.place(ball.x);
   marble.position.set(ball.x, ball.y, ball.z);
   // Turning as it goes, as a ball does on the water.
   spinRate[0] = ball.vz / ball.r;
@@ -348,6 +272,17 @@ stage.renderer.setAnimationLoop((now) => {
   turn(q, spinRate, dt);
   spin.quaternion.set(...q);
 
+  // White water: spray thrown up round the float, the more the wilder the river.
+  const white = Math.max(0, state.wild - 0.4) / 0.6;
+  if (Math.random() < white * white * dt * 14) {
+    const a = river.flow(ball.x), ahead = 2 + Math.random() * 14, aside = (Math.random() - 0.5) * state.width * 0.8;
+    const x = ball.x + Math.cos(a) * ahead - Math.sin(a) * aside, z = ball.z + Math.sin(a) * ahead + Math.cos(a) * aside;
+    const [ux, uz] = river.water(x, z);
+    effects.burst({
+      at: [x, ocean.sea.sample(x, z).height, z], count: Math.round(8 + 14 * white), mesh: () => new GFX.Mesh(drop, dropMaterial),
+      speed: 1 + 2 * white, up: 1.5 + 2.5 * white, carry: [ux, uz], life: 0.8, spin: 0, bounce: 0, floaty: 1, scale: [0.6, 1.6],
+    });
+  }
   ocean.update(dt);
   effects.update(dt);
 
@@ -357,12 +292,12 @@ stage.renderer.setAnimationLoop((now) => {
   stage.target.y += (ball.y + 0.8 - stage.target.y) * k;
   stage.target.z += (ball.z - stage.target.z) * k;
   stage.look();
-  toCamera.subVectors(camera.position, stage.target).multiplyScalar(1 + 0.14 * state.height);
+  toCamera.subVectors(camera.position, stage.target).multiplyScalar(1 + 0.14 * waveHeight());
   camera.position.copy(stage.target).add(toCamera);
   // High enough to see the float over the water between: wherever a crest
   // would come between, the camera rises over it, quickly, and settles back slowly.
   const T = stage.target, C = camera.position;
-  let need = Math.max(ocean.sea.sample(C.x, C.z).height + 1.6, T.y + 2 + 0.5 * state.height);
+  let need = Math.max(ocean.sea.sample(C.x, C.z).height + 1.6, T.y + 2 + 0.5 * waveHeight());
   for (const f of [0.25, 0.5, 0.75]) {
     const crest = ocean.sea.sample(T.x + (C.x - T.x) * f, T.z + (C.z - T.z) * f).height + 0.8;
     need = Math.max(need, T.y + (crest - T.y) / f);
@@ -374,11 +309,11 @@ stage.renderer.setAnimationLoop((now) => {
   stage.render();
 
   sound.update({
-    height: state.height, foam: state.foam, swing: ocean.sea.sample(ball.x, ball.z).rise,
+    height: waveHeight(), foam: foam(), swing: ocean.sea.sample(ball.x, ball.z).rise,
     speed: Math.hypot(ball.vx, ball.vz), wet: ball.wet,
   });
   hudDrift.textContent = `${ball.x.toFixed(0)} m downstream`;
 });
 
 /** For the console, and for a test to drive. */
-globalThis.endless = { ocean, stage, ball, state, panel };
+globalThis.endless = { ocean, stage, ball, state, panel, river };
