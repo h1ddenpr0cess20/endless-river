@@ -83,8 +83,8 @@ const foam = () => riverOf(state.wild).sea.foam;
 function skyOf(s) {
   let sky = at(DAY, s.hour);
   if (s.overcast > 0) {
-    const grey = mixSky(SKIES.storm, NIGHT_STORM, at(DARK, s.hour));
-    sky = mixSky(sky, { ...grey, sun: { ...grey.sun, at: sky.sun.at } }, s.overcast);
+    const gray = mixSky(SKIES.storm, NIGHT_STORM, at(DARK, s.hour));
+    sky = mixSky(sky, { ...gray, sun: { ...gray.sun, at: sky.sun.at } }, s.overcast);
   }
   const muddy = { deep: '#1a1408', body: '#5a4a24', glow: '#8a7a3a' };
   const water = { ...sky.water };
